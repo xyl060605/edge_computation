@@ -1,0 +1,33 @@
+{
+  "profile_name": "GOOUUU ESP32-S3-CAM V1.5 N16R8 / user OV3660",
+  "evidence_date": "2026-11-05",
+  "status": "Candidate configuration based on user identification, tutorial wiring and corroborated board-family documents; not electrically verified or hardware tested",
+  "board_kconfig": "CONFIG_BOARD_TYPE_BREAD_COMPACT_WIFI_CAM",
+  "camera": {
+    "sensor_user_confirmed": "OV3660",
+    "d0_d7": [11, 9, 8, 10, 12, 18, 17, 16],
+    "xclk": 15, "pclk": 13, "vsync": 6, "href": 7,
+    "sccb_sda": 4, "sccb_scl": 5,
+    "pwdn_gpio": -1, "reset_gpio": -1,
+    "reset_pwdn_note": "No dedicated software GPIO. Do not interpret -1 as physical FPC pins disconnected.",
+    "candidate_xclk_hz": 20000000,
+    "candidate_pixel_format": "RGB565",
+    "candidate_frame_size": "QVGA"
+  },
+  "audio_input": {"ws": 1, "sck": 2, "din": 42},
+  "audio_output": {"dout": 39, "bclk": 40, "lrck": 41},
+  "display": {
+    "driver": "ST7789", "width": 240, "height": 240,
+    "mosi": 20, "sclk": 19, "rst": 21, "dc": 47, "cs": 45, "backlight": 38,
+    "sclk_evidence_note": "Tutorial 24-27s subtitle says 15; physical row and readable GPIO labels show 19. Candidate follows physical row and matching upstream configuration."
+  },
+  "boot_button_gpio": 0,
+  "builtin_led_gpio": 48,
+  "memory_candidate": {"flash_mb": 16, "flash_mode": "QIO", "psram_mb": 8, "psram_mode": "Octal", "psram_mhz": 80},
+  "original_bin_descriptor": {"project": "xiaozhi", "version": "2.0.3", "idf_version": "v5.4.2"},
+  "camera_board_family_gpio_corroborated": true,
+  "user_hardware_electrically_verified": false,
+  "compiled": false,
+  "flashed": false,
+  "evidence": ["board-evidence/GPIO核验报告.md", "board-evidence/gpio-comparison.json", "../../reports/wiring-tutorial/", "../../docs/hardware-confirmed.json"]
+}

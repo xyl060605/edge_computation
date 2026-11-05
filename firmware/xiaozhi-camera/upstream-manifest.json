@@ -1,0 +1,154 @@
+{
+  "repository": "https://github.com/78/xiaozhi-esp32",
+  "tag": "v2.0.3",
+  "commit": "dd45d0de26bb64f339fb9f311a0952e474152166",
+  "files": [
+    {
+      "path": ".github/workflows/build.yml",
+      "git_blob_sha": "d96591922a8e656d7032eae7c3678be548cc4823",
+      "sha256": "2b7405c106ca671a5a50c170948b0af28a6616b5e4f343c17a9b965e4ba63863",
+      "bytes": 3293,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/.github/workflows/build.yml"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "git_blob_sha": "ee7c791cb9761f80020a1e9ccd5c32986bf58def",
+      "sha256": "bb11c5a75796f8db0ea6babc11f30c12be9fac5c15e40b30b0c3ce857d5b83d7",
+      "bytes": 497,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/CMakeLists.txt"
+    },
+    {
+      "path": "main/CMakeLists.txt",
+      "git_blob_sha": "489a0a35f22fd17e0f08b0973720dfd4da9f9df1",
+      "sha256": "6e5054f40e2a5e4ac84b6079d1545505326d3896916311a14c60ed754da9611d",
+      "bytes": 33104,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/CMakeLists.txt"
+    },
+    {
+      "path": "main/boards/bread-compact-wifi-s3cam/compact_wifi_board_s3cam.cc",
+      "git_blob_sha": "af4b6b93cf8c6553869414f716e72f6503ad5ea4",
+      "sha256": "6a147d26ba45420a5bf3378d335509034652e6b9ca8ff43423e3dbb10ac7737f",
+      "bytes": 7578,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/boards/bread-compact-wifi-s3cam/compact_wifi_board_s3cam.cc"
+    },
+    {
+      "path": "main/boards/bread-compact-wifi-s3cam/config.h",
+      "git_blob_sha": "857d8c08e71b616d7c271aef189bd4d95cbae4b0",
+      "sha256": "ef09c393e8745893c822c74c5776baf250e98cbcdb882f988aeea1aef1677e80",
+      "bytes": 8895,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/boards/bread-compact-wifi-s3cam/config.h"
+    },
+    {
+      "path": "main/boards/common/camera.h",
+      "git_blob_sha": "75c780c179f9e7140feac3a9c7da05a3eb5a73ba",
+      "sha256": "da525ec2e4d0a1468e3c2def20b0aaff84a555502ac46e2af151cc7a816c962b",
+      "bytes": 376,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/boards/common/camera.h"
+    },
+    {
+      "path": "main/boards/common/esp32_camera.cc",
+      "git_blob_sha": "a7eeed0bfcb82c4758d311487089621fdbdd35cb",
+      "sha256": "23f09bca6cc62ef22f8e18f48e8c12ecd4fa1340564b10b1a4eebc300ede9389",
+      "bytes": 9301,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/boards/common/esp32_camera.cc"
+    },
+    {
+      "path": "main/boards/common/esp32_camera.h",
+      "git_blob_sha": "7d5c63fef3b3e3fc5c42bf2568e31a67f9c1b35d",
+      "sha256": "1b0b7a284c979a7203af3e8a2c4fda538ef371ee643ac9f6d83794bc4dce3a7b",
+      "bytes": 843,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/boards/common/esp32_camera.h"
+    },
+    {
+      "path": "main/idf_component.yml",
+      "git_blob_sha": "166dc543a241888e04793431693dcd26ea7aeff1",
+      "sha256": "0d608d58cd0692111259191803083e1ab8050d23ac3c506dbcb202fccd187017",
+      "bytes": 2204,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/idf_component.yml"
+    },
+    {
+      "path": "sdkconfig.defaults",
+      "git_blob_sha": "c98f0701ca453938754c40586eee4bcbca293c02",
+      "sha256": "09d4769de4393e909facfcbd74e44aefd56f33d904edb7a4469f07a1d501907f",
+      "bytes": 2123,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/sdkconfig.defaults"
+    },
+    {
+      "path": "scripts/release.py",
+      "git_blob_sha": "496b3ab7eeaf007317f279124218009d48871b77",
+      "sha256": "c038c3ea984f2dea34c4019e09c04f31e602cd21b323675627447e0d8cc6eda7",
+      "bytes": 9895,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/scripts/release.py"
+    },
+    {
+      "path": "sdkconfig.defaults.esp32s3",
+      "git_blob_sha": "219e3baae29b33150426636c980f148c0e9468d5",
+      "sha256": "88024a09af151b50b5be6a6924b992dcc4c8a39fccf64d4be566297b1917b5b3",
+      "bytes": 707,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/sdkconfig.defaults.esp32s3"
+    },
+    {
+      "path": "main/display/lvgl_display/jpg/image_to_jpeg.h",
+      "git_blob_sha": "89ddc4cd14ead2cba744b5168656ffa4988a151c",
+      "sha256": "7e3ca82dbe74527ca4915bad6f2c7b45424c990162bca1a5c8b03b313f0a9e06",
+      "bytes": 2342,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/display/lvgl_display/jpg/image_to_jpeg.h"
+    },
+    {
+      "path": "main/display/lvgl_display/jpg/image_to_jpeg.cpp",
+      "git_blob_sha": "8fc99270abd10815d6f61f33facb9222cb64fd08",
+      "sha256": "fd145c7fc6ddb00283d849f3adef145a426df256037a8c9f9d2ad57523fbdc3e",
+      "bytes": 7036,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/display/lvgl_display/jpg/image_to_jpeg.cpp"
+    },
+    {
+      "path": "main/application.h",
+      "git_blob_sha": "bff4e9e9c6b4a5e301f9842dd5846feb16bac6e5",
+      "sha256": "4e4746e9dda54eebb9b21190da98ef5235819e08a4d1240908b01ce164f4ba45",
+      "bytes": 3236,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/application.h"
+    },
+    {
+      "path": "main/device_state.h",
+      "git_blob_sha": "4ffafae20e85aa45f0ed105c49c56f9f15c8afa4",
+      "sha256": "6dc619cadeac476941977ce73aeb6e5146a69e64120a0200fce9c64bbdc6a6f8",
+      "bytes": 400,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/device_state.h"
+    },
+    {
+      "path": "main/Kconfig.projbuild",
+      "git_blob_sha": "6230ea65aab40a9e73bac376ffdc3ca44708824d",
+      "sha256": "c6bc58a230fca817267eaf558b4b10f3cd0e6e3e6ccb058ba776e0d22a7e0749",
+      "bytes": 21891,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/Kconfig.projbuild"
+    },
+    {
+      "path": "main/boards/common/wifi_board.h",
+      "git_blob_sha": "c84cf0f16648a5f027575fb5ca56a80d6e89dccf",
+      "sha256": "e39d8d3aa09f7aaa8e3fb1b1bf13a89448e5873931a537b90f803282224d95ae",
+      "bytes": 703,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/boards/common/wifi_board.h"
+    },
+    {
+      "path": "main/boards/common/wifi_board.cc",
+      "git_blob_sha": "b9c32cdbd6bdeb3545c0508feedb7edd5d103767",
+      "sha256": "50b0f0f255d2b8c52ffde7fe4bd640b1b504f143b70befe72439220ad01c0650",
+      "bytes": 8543,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/boards/common/wifi_board.cc"
+    },
+    {
+      "path": "main/main.cc",
+      "git_blob_sha": "7ceda913b1a9731842de307f524a2d9e5d49d49a",
+      "sha256": "badd9a73c2cddc2396d247e65409cdb994415c1bd8ae26444da3c9f07aa16ed4",
+      "bytes": 826,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/main/main.cc"
+    },
+    {
+      "path": "LICENSE",
+      "git_blob_sha": "e90b55454056bdf5b7c7a48565ef7bf2893bd1e1",
+      "sha256": "0a5a839033bfe18fe75d32b50d9d028912cf876f69ef59c2791aeb2971335d05",
+      "bytes": 1140,
+      "source_url": "https://github.com/78/xiaozhi-esp32/blob/dd45d0de26bb64f339fb9f311a0952e474152166/LICENSE"
+    }
+  ]
+}

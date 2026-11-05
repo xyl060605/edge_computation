@@ -1,0 +1,95 @@
+name: Mebot camera compile-only validation
+
+# Copy this template into .github/workflows/ in a repository containing this
+# package at firmware/xiaozhi-camera. Creating/uploading that repo is manual.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-upstream-board:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      # Upstream v2.0.3 CI uses release-v5.4 and requires IDF >=5.4.0.
+      # A fixed patch release is chosen here; this template has NOT been run.
+      image: espressif/idf:v5.4.2
+    steps:
+      - name: Read delivery package
+        uses: actions/checkout@v4
+        with:
+          path: delivery
+
+      - name: Checkout exact upstream v2.0.3 commit
+        uses: actions/checkout@v4
+        with:
+          repository: 78/xiaozhi-esp32
+          ref: dd45d0de26bb64f339fb9f311a0952e474152166
+          path: upstream-src
+          submodules: recursive
+
+      - name: Verify and apply exact patch
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/upstream-src"
+          python delivery/firmware/xiaozhi-camera/apply_patch.py --source upstream-src --apply
+
+      - name: Compile and merge; never flash
+        shell: bash
+        working-directory: upstream-src
+        run: |
+          source "$IDF_PATH/export.sh"
+          python - <<'PY'
+          import re, subprocess
+          version = subprocess.check_output(['idf.py', '--version'], text=True)
+          if not re.search(r'ESP-IDF v5\.4\.2(?:\s|$|-)', version):
+              raise SystemExit('Unexpected ESP-IDF version: '+version)
+          print(version)
+          PY
+          defaults="sdkconfig.defaults;sdkconfig.defaults.esp32s3;../delivery/firmware/xiaozhi-camera/sdkconfig.mebot.defaults"
+          idf.py -D "SDKCONFIG_DEFAULTS=$defaults" set-target esp32s3
+          python - <<'PY'
+          from pathlib import Path
+          configured = set(Path('sdkconfig').read_text().splitlines())
+          required = {'CONFIG_COMPILER_CXX_EXCEPTIONS=y',
+                      'CONFIG_COMPILER_CXX_RTTI=y',
+                      'CONFIG_BOARD_TYPE_BREAD_COMPACT_WIFI_CAM=y',
+                      'CONFIG_LCD_ST7789_240X240=y',
+                      'CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y',
+                      'CONFIG_ESPTOOLPY_FLASHMODE_QIO=y',
+                      'CONFIG_SPIRAM=y',
+                      'CONFIG_SPIRAM_MODE_OCT=y',
+                      'CONFIG_SPIRAM_SPEED_80M=y'}
+          missing = required - configured
+          if missing:
+              raise SystemExit('Required generated sdkconfig options missing: '+', '.join(sorted(missing)))
+          PY
+          idf.py -D "SDKCONFIG_DEFAULTS=$defaults" -D BOARD_NAME=bread-compact-wifi-s3cam-mebot-UNVERIFIED build
+          idf.py merge-bin
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          Path('build/VALIDATION_STATUS.json').write_text(json.dumps({
+              'source_commit':'dd45d0de26bb64f339fb9f311a0952e474152166',
+              'idf_version':'5.4.2', 'compilation_passed':True,
+              'hardware_3660_pin_map_verified':False,
+              'hardware_test_passed':False,
+              'flash_authorized':False,
+              'warning':'Compile-only artifact. Not a verified replacement for the course 3660 firmware.'
+          },indent=2)+'\n')
+          PY
+
+      - name: Upload explicitly unverified compile artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaozhi-v2.0.3-mebot-UPSTREAM-PINS-UNVERIFIED
+          retention-days: 7
+          path: |
+            upstream-src/build/merged-binary.bin
+            upstream-src/build/xiaozhi.elf
+            upstream-src/build/VALIDATION_STATUS.json
+            upstream-src/sdkconfig
+            upstream-src/dependencies.lock
+          if-no-files-found: error

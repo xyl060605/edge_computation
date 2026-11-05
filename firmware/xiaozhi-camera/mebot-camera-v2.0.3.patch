@@ -1,0 +1,718 @@
+diff --git a/main/boards/bread-compact-wifi-s3cam/compact_wifi_board_s3cam.cc b/main/boards/bread-compact-wifi-s3cam/compact_wifi_board_s3cam.cc
+--- a/main/boards/bread-compact-wifi-s3cam/compact_wifi_board_s3cam.cc
++++ b/main/boards/bread-compact-wifi-s3cam/compact_wifi_board_s3cam.cc
+@@ -9,6 +9,8 @@
+ #include "lamp_controller.h"
+ #include "led/single_led.h"
+ #include "esp32_camera.h"
++#include "mebot_camera_server.h"
++#include <memory>
+ 
+ #include <wifi_station.h>
+ #include <esp_log.h>
+@@ -67,6 +69,7 @@
+     Button boot_button_;
+     LcdDisplay* display_;
+      Esp32Camera* camera_;
++    std::unique_ptr<MebotCameraServer> mebot_camera_server_;
+ 
+     void InitializeSpi() {
+         spi_bus_config_t buscfg = {};
+@@ -153,6 +156,7 @@
+         config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+         camera_ = new Esp32Camera(config);
+         camera_->SetHMirror(false);
++        mebot_camera_server_ = std::make_unique<MebotCameraServer>(*camera_);
+     }
+ 
+     void InitializeButtons() {
+@@ -178,6 +182,20 @@
+         
+     }
+ 
++    virtual void StartNetwork() override {
++        WifiBoard::StartNetwork();
++        // Start only after Wi-Fi/lwIP is initialized and the radio is supplying
++        // entropy to esp_fill_random; never replace provisioning callbacks.
++        if (WifiStation::GetInstance().IsConnected() && mebot_camera_server_ != nullptr) {
++            if (!mebot_camera_server_->Start()) {
++                ESP_LOGE(TAG, "Local mebot camera server could not start; Xiaozhi voice remains enabled");
++            } else {
++                const std::string ip = WifiStation::GetInstance().GetIpAddress();
++                ESP_LOGI(TAG, "Local camera URL: http://%s:8080/capture", ip.c_str());
++            }
++        }
++    }
++
+     virtual Led* GetLed() override {
+         static SingleLed led(BUILTIN_LED_GPIO);
+         return &led;
+diff --git a/main/boards/common/esp32_camera.cc b/main/boards/common/esp32_camera.cc
+--- a/main/boards/common/esp32_camera.cc
++++ b/main/boards/common/esp32_camera.cc
+@@ -1,5 +1,4 @@
+ #include "esp32_camera.h"
+-#include "mcp_server.h"
+ #include "display.h"
+ #include "board.h"
+ #include "system_info.h"
+@@ -8,253 +7,223 @@
+ 
+ #include <esp_log.h>
+ #include <esp_heap_caps.h>
++#include <esp_timer.h>
++#include <algorithm>
+ #include <cstring>
++#include <memory>
++#include <stdexcept>
+ 
+ #define TAG "Esp32Camera"
+ 
++namespace {
++struct FrameReturn {
++    camera_fb_t* value = nullptr;
++    ~FrameReturn() { if (value != nullptr) esp_camera_fb_return(value); }
++};
++}
++
++MebotJpegImage::~MebotJpegImage() { Clear(); }
++
++void MebotJpegImage::Clear() {
++    if (data != nullptr) heap_caps_free(data);
++    data = nullptr;
++    size = capacity = frame_id = 0;
++    captured_at_us = 0;
++    failed = false;
++}
++
++bool MebotJpegImage::Append(size_t index, const void* bytes, size_t length) {
++    if (failed) return false;
++    if (bytes == nullptr) { failed = length != 0; return !failed; }
++    if (length == 0) return true;
++    if (index != size || size > kMaxBytes || length > kMaxBytes - size) {
++        failed = true;
++        return false;
++    }
++    const size_t required = size + length;
++    if (required > capacity) {
++        const size_t grown = std::min(kMaxBytes, std::max(required, capacity == 0 ? size_t(16384) : capacity * 2));
++        auto next = static_cast<uint8_t*>(heap_caps_realloc(data, grown, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
++        if (next == nullptr) { failed = true; return false; }
++        data = next;
++        capacity = grown;
++    }
++    memcpy(data + size, bytes, length);
++    size = required;
++    return true;
++}
++
+ Esp32Camera::Esp32Camera(const camera_config_t& config) {
+-    // camera init
+-    esp_err_t err = esp_camera_init(&config); // 配置上面定义的参数
++    const esp_err_t err = esp_camera_init(&config);
+     if (err != ESP_OK) {
+         ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
+         return;
+     }
+-
+-    sensor_t *s = esp_camera_sensor_get(); // 获取摄像头型号
+-    if (s->id.PID == GC0308_PID) {
+-        s->set_hmirror(s, 0);  // 这里控制摄像头镜像 写1镜像 写0不镜像
+-    }
++    initialized_ = true;
++    sensor_t* sensor = esp_camera_sensor_get();
++    if (sensor != nullptr && sensor->id.PID == GC0308_PID) sensor->set_hmirror(sensor, 0);
+ }
+ 
+ Esp32Camera::~Esp32Camera() {
+-    if (fb_) {
+-        esp_camera_fb_return(fb_);
+-        fb_ = nullptr;
+-    }
+-    esp_camera_deinit();
++    std::lock_guard<std::mutex> lock(camera_mutex_);
++    ReleaseCapturedFrame();
++    if (initialized_) esp_camera_deinit();
++}
++
++void Esp32Camera::ReleaseCapturedFrame() {
++    if (fb_ != nullptr) esp_camera_fb_return(fb_);
++    fb_ = nullptr;
++    captured_at_us_ = 0;
+ }
+ 
+ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token) {
++    std::lock_guard<std::mutex> lock(camera_mutex_);
+     explain_url_ = url;
+     explain_token_ = token;
+ }
+ 
+ bool Esp32Camera::Capture() {
+-    if (encoder_thread_.joinable()) {
+-        encoder_thread_.join();
+-    }
+-
+-    auto start_time = esp_timer_get_time();
+-    int frames_to_get = 2;
+-    // Try to get a stable frame
+-    for (int i = 0; i < frames_to_get; i++) {
+-        if (fb_ != nullptr) {
+-            esp_camera_fb_return(fb_);
++    std::lock_guard<std::mutex> lock(camera_mutex_);
++    if (!initialized_) return false;
++    ReleaseCapturedFrame();
++    // Discard the queued frame, then obtain a subsequently captured frame.
++    for (int i = 0; i < 2; ++i) {
++        ReleaseCapturedFrame();
++        fb_ = esp_camera_fb_get();
++        if (fb_ == nullptr) return false;
++    }
++    captured_at_us_ = esp_timer_get_time();
++    auto display = dynamic_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
++    if (display != nullptr && fb_->format == PIXFORMAT_RGB565) {
++        auto data = static_cast<uint8_t*>(heap_caps_malloc(fb_->len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
++        if (data == nullptr) { ReleaseCapturedFrame(); return false; }
++        auto src = reinterpret_cast<uint16_t*>(fb_->buf);
++        auto dst = reinterpret_cast<uint16_t*>(data);
++        for (size_t i = 0; i < fb_->len / 2; ++i) dst[i] = __builtin_bswap16(src[i]);
++        std::unique_ptr<uint8_t, decltype(&heap_caps_free)> preview(data, &heap_caps_free);
++        try {
++            auto image = std::make_unique<LvglAllocatedImage>(preview.get(), fb_->len, fb_->width, fb_->height,
++                                                           fb_->width * 2, LV_COLOR_FORMAT_RGB565);
++            preview.release();
++            display->SetPreviewImage(std::move(image));
++        } catch (...) { ReleaseCapturedFrame(); throw; }
++    }
++    return true;
++}
++
++bool Esp32Camera::SetHMirror(bool enabled) {
++    std::lock_guard<std::mutex> lock(camera_mutex_);
++    sensor_t* sensor = initialized_ ? esp_camera_sensor_get() : nullptr;
++    return sensor != nullptr && sensor->set_hmirror(sensor, enabled) == ESP_OK;
++}
++
++bool Esp32Camera::SetVFlip(bool enabled) {
++    std::lock_guard<std::mutex> lock(camera_mutex_);
++    sensor_t* sensor = initialized_ ? esp_camera_sensor_get() : nullptr;
++    return sensor != nullptr && sensor->set_vflip(sensor, enabled) == ESP_OK;
++}
++
++bool Esp32Camera::EncodeFrame(camera_fb_t* frame, MebotJpegImage& output, uint8_t quality) {
++    output.Clear();
++    if (frame == nullptr || frame->buf == nullptr || frame->len == 0 || frame->width == 0 || frame->height == 0) return false;
++    bool encoded = false;
++    if (frame->format == PIXFORMAT_JPEG) {
++        encoded = output.Append(0, frame->buf, frame->len);
++    } else {
++        size_t channels = 0;
++        if (frame->format == PIXFORMAT_RGB565 || frame->format == PIXFORMAT_YUV422) channels = 2;
++        else if (frame->format == PIXFORMAT_RGB888) channels = 3;
++        else if (frame->format == PIXFORMAT_GRAYSCALE) channels = 1;
++        const size_t pixels = size_t(frame->width) * frame->height;
++        if (channels == 0 || pixels > frame->len / channels ||
++            (frame->format == PIXFORMAT_YUV422 && frame->width % 2 != 0)) return false;
++        // v2.0.3's encoder ignores a short callback return. Preserve our own
++        // failure flag and validate JPEG markers before accepting its output.
++        encoded = image_to_jpeg_cb(frame->buf, frame->len, frame->width, frame->height,
++            frame->format, quality, [](void* arg, size_t index, const void* data, size_t length) -> size_t {
++                auto out = static_cast<MebotJpegImage*>(arg);
++                return out->Append(index, data, length) ? length : 0;
++            }, &output);
++    }
++    if (!encoded || output.failed || output.size < 4 || output.size > MebotJpegImage::kMaxBytes ||
++        output.data[0] != 0xff || output.data[1] != 0xd8 ||
++        output.data[output.size - 2] != 0xff || output.data[output.size - 1] != 0xd9) {
++        output.Clear();
++        return false;
++    }
++    return true;
++}
++
++MebotJpegResult Esp32Camera::CopyJpeg(MebotJpegImage& output) {
++    output.Clear();
++    std::unique_lock<std::mutex> lock(camera_mutex_, std::try_to_lock);
++    if (!lock.owns_lock()) return MebotJpegResult::kBusy;
++    if (!initialized_) return MebotJpegResult::kNotReady;
++    // Capture reserves its frame for Explain. An abandoned reservation expires
++    // instead of preventing all local snapshots indefinitely.
++    if (fb_ != nullptr) {
++        if (esp_timer_get_time() - captured_at_us_ <= 5000000) return MebotJpegResult::kBusy;
++        ReleaseCapturedFrame();
++    }
++    FrameReturn fresh;
++    for (int i = 0; i < 2; ++i) {
++        if (fresh.value != nullptr) esp_camera_fb_return(fresh.value);
++        fresh.value = esp_camera_fb_get();
++        if (fresh.value == nullptr) return MebotJpegResult::kCaptureFailed;
++    }
++    const int64_t captured = esp_timer_get_time();
++    if (!EncodeFrame(fresh.value, output, 75)) return MebotJpegResult::kEncodeFailed;
++    output.frame_id = ++frame_sequence_;
++    output.captured_at_us = captured;
++    // fresh returns the driver framebuffer before HTTP begins sending.
++    return MebotJpegResult::kOk;
++}
++
++std::string Esp32Camera::Explain(const std::string& question) {
++    MebotJpegImage image;
++    std::string url, token;
++    {
++        std::lock_guard<std::mutex> lock(camera_mutex_);
++        if (explain_url_.empty()) { ReleaseCapturedFrame(); throw std::runtime_error("Image explain URL is not set"); }
++        if (fb_ == nullptr) throw std::runtime_error("Capture a photo before explaining it");
++        bool copied = false;
++        // String copies can also throw under memory pressure. The reservation
++        // must be returned on those paths, not only when JPEG encoding throws.
++        try {
++            url = explain_url_;
++            token = explain_token_;
++            copied = EncodeFrame(fb_, image);
+         }
+-        fb_ = esp_camera_fb_get();
+-        if (fb_ == nullptr) {
+-            ESP_LOGE(TAG, "Camera capture failed");
+-            return false;
+-        }
+-    }
+-    auto end_time = esp_timer_get_time();
+-    ESP_LOGI(TAG, "Camera captured %d frames in %d ms", frames_to_get, int((end_time - start_time) / 1000));
+-
+-    // 显示预览图片
+-    auto display = dynamic_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
+-    if (display != nullptr) {
+-        auto data = (uint8_t*)heap_caps_malloc(fb_->len, MALLOC_CAP_SPIRAM);
+-        if (data == nullptr) {
+-            ESP_LOGE(TAG, "Failed to allocate memory for preview image");
+-            return false;
+-        }
+-
+-        auto src = (uint16_t*)fb_->buf;
+-        auto dst = (uint16_t*)data;
+-        size_t pixel_count = fb_->len / 2;
+-        for (size_t i = 0; i < pixel_count; i++) {
+-            // 交换每个16位字内的字节
+-            dst[i] = __builtin_bswap16(src[i]);
+-        }
+-
+-        auto image = std::make_unique<LvglAllocatedImage>(data, fb_->len, fb_->width, fb_->height, fb_->width * 2, LV_COLOR_FORMAT_RGB565);
+-        display->SetPreviewImage(std::move(image));
+-    }
+-    return true;
+-}
+-
+-bool Esp32Camera::SetHMirror(bool enabled) {
+-    sensor_t *s = esp_camera_sensor_get();
+-    if (s == nullptr) {
+-        ESP_LOGE(TAG, "Failed to get camera sensor");
+-        return false;
+-    }
+-    
+-    esp_err_t err = s->set_hmirror(s, enabled);
+-    if (err != ESP_OK) {
+-        ESP_LOGE(TAG, "Failed to set horizontal mirror: %d", err);
+-        return false;
+-    }
+-    
+-    ESP_LOGI(TAG, "Camera horizontal mirror set to: %s", enabled ? "enabled" : "disabled");
+-    return true;
+-}
+-
+-bool Esp32Camera::SetVFlip(bool enabled) {
+-    sensor_t *s = esp_camera_sensor_get();
+-    if (s == nullptr) {
+-        ESP_LOGE(TAG, "Failed to get camera sensor");
+-        return false;
+-    }
+-    
+-    esp_err_t err = s->set_vflip(s, enabled);
+-    if (err != ESP_OK) {
+-        ESP_LOGE(TAG, "Failed to set vertical flip: %d", err);
+-        return false;
+-    }
+-    
+-    ESP_LOGI(TAG, "Camera vertical flip set to: %s", enabled ? "enabled" : "disabled");
+-    return true;
+-}
+-
+-/**
+- * @brief 将摄像头捕获的图像发送到远程服务器进行AI分析和解释
+- * 
+- * 该函数将当前摄像头缓冲区中的图像编码为JPEG格式，并通过HTTP POST请求
+- * 以multipart/form-data的形式发送到指定的解释服务器。服务器将根据提供的
+- * 问题对图像进行AI分析并返回结果。
+- * 
+- * 实现特点：
+- * - 使用独立线程编码JPEG，与主线程分离
+- * - 采用分块传输编码(chunked transfer encoding)优化内存使用
+- * - 通过队列机制实现编码线程和发送线程的数据同步
+- * - 支持设备ID、客户端ID和认证令牌的HTTP头部配置
+- * 
+- * @param question 要向AI提出的关于图像的问题，将作为表单字段发送
+- * @return std::string 服务器返回的JSON格式响应字符串
+- *         成功时包含AI分析结果，失败时包含错误信息
+- *         格式示例：{"success": true, "result": "分析结果"}
+- *                  {"success": false, "message": "错误信息"}
+- * 
+- * @note 调用此函数前必须先调用SetExplainUrl()设置服务器URL
+- * @note 函数会等待之前的编码线程完成后再开始新的处理
+- * @warning 如果摄像头缓冲区为空或网络连接失败，将返回错误信息
+- */
+-std::string Esp32Camera::Explain(const std::string& question) {
+-    if (explain_url_.empty()) {
+-        throw std::runtime_error("Image explain URL or token is not set");
+-    }
+-
+-    // 创建局部的 JPEG 队列, 40 entries is about to store 512 * 40 = 20480 bytes of JPEG data
+-    QueueHandle_t jpeg_queue = xQueueCreate(40, sizeof(JpegChunk));
+-    if (jpeg_queue == nullptr) {
+-        ESP_LOGE(TAG, "Failed to create JPEG queue");
+-        throw std::runtime_error("Failed to create JPEG queue");
+-    }
+-
+-    // We spawn a thread to encode the image to JPEG using optimized encoder (cost about 500ms and 8KB SRAM)
+-    encoder_thread_ = std::thread([this, jpeg_queue]() {
+-        image_to_jpeg_cb(fb_->buf, fb_->len, fb_->width, fb_->height, fb_->format, 80,
+-            [](void* arg, size_t index, const void* data, size_t len) -> size_t {
+-            auto jpeg_queue = (QueueHandle_t)arg;
+-            JpegChunk chunk = {
+-                .data = (uint8_t*)heap_caps_aligned_alloc(16, len, MALLOC_CAP_SPIRAM),
+-                .len = len
+-            };
+-            memcpy(chunk.data, data, len);
+-            xQueueSend(jpeg_queue, &chunk, portMAX_DELAY);
+-            return len;
+-        }, jpeg_queue);
+-    });
+-
+-    auto network = Board::GetInstance().GetNetwork();
+-    auto http = network->CreateHttp(3);
+-    // 构造multipart/form-data请求体
+-    std::string boundary = "----ESP32_CAMERA_BOUNDARY";
+-
+-    // 配置HTTP客户端，使用分块传输编码
++        catch (...) { ReleaseCapturedFrame(); throw; }
++        ReleaseCapturedFrame();
++        if (!copied) throw std::runtime_error("Failed to encode photo within JPEG size limit");
++    }
++    // All network writes use the independent JPEG; no camera lock or driver
++    // framebuffer is held while a cloud request waits or fails.
++    auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
++    const std::string boundary = "----ESP32_CAMERA_BOUNDARY";
+     http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
+     http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
+-    if (!explain_token_.empty()) {
+-        http->SetHeader("Authorization", "Bearer " + explain_token_);
+-    }
++    if (!token.empty()) http->SetHeader("Authorization", "Bearer " + token);
+     http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+     http->SetHeader("Transfer-Encoding", "chunked");
+-    if (!http->Open("POST", explain_url_)) {
+-        ESP_LOGE(TAG, "Failed to connect to explain URL");
+-        // Clear the queue
+-        encoder_thread_.join();
+-        JpegChunk chunk;
+-        while (xQueueReceive(jpeg_queue, &chunk, portMAX_DELAY) == pdPASS) {
+-            if (chunk.data != nullptr) {
+-                heap_caps_free(chunk.data);
+-            } else {
+-                break;
+-            }
+-        }
+-        vQueueDelete(jpeg_queue);
+-        throw std::runtime_error("Failed to connect to explain URL");
+-    }
+-    
+-    {
+-        // 第一块：question字段
+-        std::string question_field;
+-        question_field += "--" + boundary + "\r\n";
+-        question_field += "Content-Disposition: form-data; name=\"question\"\r\n";
+-        question_field += "\r\n";
+-        question_field += question + "\r\n";
+-        http->Write(question_field.c_str(), question_field.size());
+-    }
+-    {
+-        // 第二块：文件字段头部
+-        std::string file_header;
+-        file_header += "--" + boundary + "\r\n";
+-        file_header += "Content-Disposition: form-data; name=\"file\"; filename=\"camera.jpg\"\r\n";
+-        file_header += "Content-Type: image/jpeg\r\n";
+-        file_header += "\r\n";
+-        http->Write(file_header.c_str(), file_header.size());
+-    }
+-
+-    // 第三块：JPEG数据
+-    size_t total_sent = 0;
+-    while (true) {
+-        JpegChunk chunk;
+-        if (xQueueReceive(jpeg_queue, &chunk, portMAX_DELAY) != pdPASS) {
+-            ESP_LOGE(TAG, "Failed to receive JPEG chunk");
+-            break;
+-        }
+-        if (chunk.data == nullptr) {
+-            break; // The last chunk
+-        }
+-        http->Write((const char*)chunk.data, chunk.len);
+-        total_sent += chunk.len;
+-        heap_caps_free(chunk.data);
+-    }
+-    // Wait for the encoder thread to finish
+-    encoder_thread_.join();
+-    // 清理队列
+-    vQueueDelete(jpeg_queue);
+-
+-    {
+-        // 第四块：multipart尾部
+-        std::string multipart_footer;
+-        multipart_footer += "\r\n--" + boundary + "--\r\n";
+-        http->Write(multipart_footer.c_str(), multipart_footer.size());
+-    }
+-    // 结束块
++    if (!http->Open("POST", url)) throw std::runtime_error("Failed to connect to explain URL");
++    const std::string question_field = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"question\"\r\n\r\n" + question + "\r\n";
++    const std::string file_header = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"camera.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
++    http->Write(question_field.c_str(), question_field.size());
++    http->Write(file_header.c_str(), file_header.size());
++    for (size_t offset = 0; offset < image.size; offset += 512) {
++        const size_t length = std::min(size_t(512), image.size - offset);
++        http->Write(reinterpret_cast<const char*>(image.data + offset), length);
++    }
++    const std::string footer = "\r\n--" + boundary + "--\r\n";
++    http->Write(footer.c_str(), footer.size());
+     http->Write("", 0);
+-
+     if (http->GetStatusCode() != 200) {
+-        ESP_LOGE(TAG, "Failed to upload photo, status code: %d", http->GetStatusCode());
++        http->Close();
+         throw std::runtime_error("Failed to upload photo");
+     }
+-
+     std::string result = http->ReadAll();
+     http->Close();
+-
+-    // Get remain task stack size
+-    size_t remain_stack_size = uxTaskGetStackHighWaterMark(nullptr);
+-    ESP_LOGI(TAG, "Explain image size=%dx%d, compressed size=%d, remain stack size=%d, question=%s\n%s",
+-        fb_->width, fb_->height, total_sent, remain_stack_size, question.c_str(), result.c_str());
+     return result;
+ }
+diff --git a/main/boards/common/esp32_camera.h b/main/boards/common/esp32_camera.h
+--- a/main/boards/common/esp32_camera.h
++++ b/main/boards/common/esp32_camera.h
+@@ -3,36 +3,53 @@
+ 
+ #include <esp_camera.h>
+ #include <lvgl.h>
+-#include <thread>
+-#include <memory>
+-
+-#include <freertos/FreeRTOS.h>
+-#include <freertos/queue.h>
+-
++#include <mutex>
++#include <string>
+ #include "camera.h"
+ 
+-struct JpegChunk {
+-    uint8_t* data;
+-    size_t len;
++// Independent, bounded copy: never exposes a driver-owned framebuffer to HTTP.
++struct MebotJpegImage {
++    static constexpr size_t kMaxBytes = 1024 * 1024;
++    uint8_t* data = nullptr;
++    size_t size = 0;
++    size_t capacity = 0;
++    uint64_t frame_id = 0;
++    int64_t captured_at_us = 0;
++    bool failed = false;
++    MebotJpegImage() = default;
++    ~MebotJpegImage();
++    MebotJpegImage(const MebotJpegImage&) = delete;
++    MebotJpegImage& operator=(const MebotJpegImage&) = delete;
++    void Clear();
++    bool Append(size_t index, const void* bytes, size_t length);
+ };
++
++enum class MebotJpegResult { kOk, kBusy, kNotReady, kCaptureFailed, kEncodeFailed };
+ 
+ class Esp32Camera : public Camera {
+ private:
++    // Serializes sensor configuration, Capture->Explain reservation and HTTP.
++    std::mutex camera_mutex_;
++    bool initialized_ = false;
+     camera_fb_t* fb_ = nullptr;
++    int64_t captured_at_us_ = 0;
++    uint64_t frame_sequence_ = 0;
+     std::string explain_url_;
+     std::string explain_token_;
+-    std::thread encoder_thread_;
++    void ReleaseCapturedFrame();
++    bool EncodeFrame(camera_fb_t* frame, MebotJpegImage& output, uint8_t quality = 80);
+ 
+ public:
+     Esp32Camera(const camera_config_t& config);
+     ~Esp32Camera();
+-
+     virtual void SetExplainUrl(const std::string& url, const std::string& token);
+     virtual bool Capture();
+-    // 翻转控制函数
+     virtual bool SetHMirror(bool enabled) override;
+     virtual bool SetVFlip(bool enabled) override;
+     virtual std::string Explain(const std::string& question);
++    // Nonblocking on a busy camera. Captures a new frame, copies/encodes it,
++    // returns the driver framebuffer before returning to the HTTP sender.
++    MebotJpegResult CopyJpeg(MebotJpegImage& output);
+ };
+ 
+-#endif // ESP32_CAMERA_H
+\ No newline at end of file
++#endif // ESP32_CAMERA_H
+diff --git a/main/boards/common/mebot_camera_server.cc b/main/boards/common/mebot_camera_server.cc
+new file mode 100644
+--- /dev/null
++++ b/main/boards/common/mebot_camera_server.cc
+@@ -0,0 +1,112 @@
++#include "mebot_camera_server.h"
++#include "application.h"
++
++#include <esp_log.h>
++#include <esp_random.h>
++#include <esp_timer.h>
++#include <cstdio>
++#include <cstring>
++#include <new>
++
++namespace {
++constexpr char kTag[] = "MebotCamera";
++constexpr char kHex[] = "0123456789abcdef";
++esp_err_t Error(httpd_req_t* request, const char* status, const char* message) {
++    httpd_resp_set_status(request, status);
++    httpd_resp_set_type(request, "application/json");
++    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
++    return httpd_resp_send(request, message, HTTPD_RESP_USE_STRLEN);
++}
++}
++
++MebotCameraServer::~MebotCameraServer() {
++    if (server_ != nullptr) httpd_stop(server_);
++    // The secret exists only in this process RAM; it is never written to NVS.
++    volatile char* value = key_.data();
++    for (size_t i = 0; i < key_.size(); ++i) value[i] = 0;
++}
++
++bool MebotCameraServer::Start() {
++    if (server_ != nullptr) return true;
++    uint8_t random[40];
++    esp_fill_random(random, sizeof(random));
++    for (size_t i = 0; i < 32; ++i) {
++        key_[i * 2] = kHex[random[i] >> 4];
++        key_[i * 2 + 1] = kHex[random[i] & 15];
++    }
++    for (size_t i = 0; i < 8; ++i) {
++        boot_id_[i * 2] = kHex[random[32 + i] >> 4];
++        boot_id_[i * 2 + 1] = kHex[random[32 + i] & 15];
++    }
++    memset(random, 0, sizeof(random));
++    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
++    config.server_port = 8080;
++    config.ctrl_port = 32769; // Separate from the Wi-Fi provisioning HTTP server.
++    config.task_priority = 2;
++    config.stack_size = 8192;
++    config.max_open_sockets = 2;
++    config.backlog_conn = 2;
++    config.lru_purge_enable = true;
++    config.recv_wait_timeout = 2;
++    config.send_wait_timeout = 2;
++    if (httpd_start(&server_, &config) != ESP_OK) { server_ = nullptr; return false; }
++    httpd_uri_t endpoint = {};
++    endpoint.uri = "/capture";
++    endpoint.method = HTTP_GET;
++    endpoint.handler = &MebotCameraServer::CaptureHandler;
++    endpoint.user_ctx = this;
++    if (httpd_register_uri_handler(server_, &endpoint) != ESP_OK) {
++        httpd_stop(server_);
++        server_ = nullptr;
++        return false;
++    }
++    // The user reads this locally over serial, then pastes it into the local UI.
++    // Do not upload serial logs containing this line.
++    ESP_LOGW(kTag, "LOCAL ONLY: port=8080 path=/capture X-Mebot-Camera-Key=%s", key_.data());
++    return true;
++}
++
++bool MebotCameraServer::Authorized(httpd_req_t* request) const {
++    constexpr char header[] = "X-Mebot-Camera-Key";
++    if (httpd_req_get_hdr_value_len(request, header) != 64) return false;
++    char candidate[65] = {};
++    if (httpd_req_get_hdr_value_str(request, header, candidate, sizeof(candidate)) != ESP_OK) return false;
++    unsigned difference = 0;
++    for (size_t i = 0; i < 64; ++i) difference |= static_cast<unsigned char>(candidate[i] ^ key_[i]);
++    memset(candidate, 0, sizeof(candidate));
++    return difference == 0;
++}
++
++esp_err_t MebotCameraServer::CaptureHandler(httpd_req_t* request) {
++    auto self = static_cast<MebotCameraServer*>(request->user_ctx);
++    try { return self->Capture(request); }
++    catch (const std::bad_alloc&) { return Error(request, "503 Service Unavailable", "{\"error\":\"camera_memory_unavailable\"}"); }
++    catch (...) { return Error(request, "503 Service Unavailable", "{\"error\":\"camera_unavailable\"}"); }
++}
++
++esp_err_t MebotCameraServer::Capture(httpd_req_t* request) {
++    if (!Authorized(request)) return Error(request, "401 Unauthorized", "{\"error\":\"camera_key_required\"}");
++    // Preserve audio: new local captures are refused during an active voice,
++    // connecting, provisioning, upgrading or startup state.
++    if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle)
++        return Error(request, "503 Service Unavailable", "{\"error\":\"voice_or_device_busy\"}");
++    const int64_t now = esp_timer_get_time();
++    if (last_capture_started_us_ != 0 && now - last_capture_started_us_ < 125000)
++        return Error(request, "503 Service Unavailable", "{\"error\":\"capture_rate_limited\"}");
++    last_capture_started_us_ = now;
++    MebotJpegImage image;
++    const auto result = camera_.CopyJpeg(image);
++    if (result != MebotJpegResult::kOk)
++        return Error(request, "503 Service Unavailable", "{\"error\":\"camera_busy_or_unavailable\"}");
++    httpd_resp_set_type(request, "image/jpeg");
++    httpd_resp_set_hdr(request, "Cache-Control", "no-store, max-age=0");
++    httpd_resp_set_hdr(request, "X-Content-Type-Options", "nosniff");
++    char id[48], captured[32];
++    snprintf(id, sizeof(id), "%s-%llu", boot_id_.data(), static_cast<unsigned long long>(image.frame_id));
++    snprintf(captured, sizeof(captured), "%lld", static_cast<long long>(image.captured_at_us));
++    httpd_resp_set_hdr(request, "X-Mebot-Frame-Id", id);
++    httpd_resp_set_hdr(request, "X-Mebot-Captured-Us", captured);
++    // Synchronous send returns on success, timeout or client disconnect; image's
++    // destructor frees its independent PSRAM buffer on every exit path.
++    return httpd_resp_send(request, reinterpret_cast<const char*>(image.data), image.size);
++}
+diff --git a/main/boards/common/mebot_camera_server.h b/main/boards/common/mebot_camera_server.h
+new file mode 100644
+--- /dev/null
++++ b/main/boards/common/mebot_camera_server.h
+@@ -0,0 +1,26 @@
++#ifndef MEBOT_CAMERA_SERVER_H
++#define MEBOT_CAMERA_SERVER_H
++
++#include <esp_http_server.h>
++#include <array>
++#include "esp32_camera.h"
++
++class MebotCameraServer {
++public:
++    explicit MebotCameraServer(Esp32Camera& camera) : camera_(camera) {}
++    ~MebotCameraServer();
++    MebotCameraServer(const MebotCameraServer&) = delete;
++    MebotCameraServer& operator=(const MebotCameraServer&) = delete;
++    bool Start();
++private:
++    Esp32Camera& camera_;
++    httpd_handle_t server_ = nullptr;
++    std::array<char, 65> key_{};
++    std::array<char, 17> boot_id_{};
++    int64_t last_capture_started_us_ = 0;
++    static esp_err_t CaptureHandler(httpd_req_t* request);
++    esp_err_t Capture(httpd_req_t* request);
++    bool Authorized(httpd_req_t* request) const;
++};
++
++#endif

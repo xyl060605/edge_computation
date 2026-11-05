@@ -1,0 +1,53 @@
+{
+  "files": [
+    {
+      "path": ".gitattributes",
+      "bytes": 20,
+      "sha256": "d711b6ba64c7208f3059111e2a74a2453348584bef1fec237198ad08befe28b9"
+    },
+    {
+      "path": ".github/workflows/mebot-camera-build.yml",
+      "bytes": 3852,
+      "sha256": "535470bdf944d3c6ab41def63ee8c863d8d67027393e9c7aed32d2dbcac05969"
+    },
+    {
+      "path": "firmware/xiaozhi-camera/apply_patch.py",
+      "bytes": 6422,
+      "sha256": "5bfa5f923fa4315c4dc0e119b21b8eaf2161c4381d2d80e436978dfa45b62a9c"
+    },
+    {
+      "path": "firmware/xiaozhi-camera/board-profile.json",
+      "bytes": 1781,
+      "sha256": "41a277da021eb3ac1e928902d865b88ab11acb98b58da803837ca810c06d6d9e"
+    },
+    {
+      "path": "firmware/xiaozhi-camera/mebot-camera-v2.0.3.patch",
+      "bytes": 29206,
+      "sha256": "2d5f5000b25307d9607af6a23cf5b06430ca356e98c3b156e5be252a0d7b83b1"
+    },
+    {
+      "path": "firmware/xiaozhi-camera/sdkconfig.mebot.defaults",
+      "bytes": 238,
+      "sha256": "1885a3be90aac7e95a585089900b848521a8cff34ef9e263b238be4a4cbba560"
+    },
+    {
+      "path": "firmware/xiaozhi-camera/upstream/LICENSE",
+      "bytes": 1140,
+      "sha256": "0a5a839033bfe18fe75d32b50d9d028912cf876f69ef59c2791aeb2971335d05"
+    },
+    {
+      "path": "firmware/xiaozhi-camera/upstream-manifest.json",
+      "bytes": 7906,
+      "sha256": "0dff7a4784ced072f14f1e336ccbdc90280b26bad53de4013ec06a7f108cc6b3"
+    },
+    {
+      "path": "README.md",
+      "bytes": 1894,
+      "sha256": "1810593d43c4f9afec2c3f480e0381939f89bd0940244a1616b7f29318618170"
+    }
+  ],
+  "source_bytes": 52459,
+  "uploaded": false,
+  "cloud_build_started": false,
+  "firmware_generated": false
+}
