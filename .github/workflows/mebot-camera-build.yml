@@ -36,6 +36,11 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE/upstream-src"
           python delivery/firmware/xiaozhi-camera/apply_patch.py --source upstream-src --apply
 
+      - name: Restore exact-version legacy component source
+        shell: bash
+        run: |
+          python delivery/firmware/xiaozhi-camera/prepare_dependencies.py --source upstream-src
+
       - name: Compile and merge; never flash
         shell: bash
         working-directory: upstream-src
@@ -92,4 +97,5 @@ jobs:
             upstream-src/build/VALIDATION_STATUS.json
             upstream-src/sdkconfig
             upstream-src/dependencies.lock
+            upstream-src/build-dependency-overrides.json
           if-no-files-found: error
